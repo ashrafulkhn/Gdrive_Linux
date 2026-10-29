@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Google Docs link (GDrive Sync)
+Comment=Open Google Docs, Sheets and Slides files in the browser
+Exec=@VENV@/bin/gdrive-sync open-link %f
+Icon=@ICON@
+Terminal=false
+NoDisplay=true
+MimeType=application/x-gdrive-sync-link;

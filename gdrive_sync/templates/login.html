@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Unlock · GDrive Sync{% endblock %}
+{% block body_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Unlock dashboard</h1>
+  <form method="post" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label>Dashboard password
+      <input type="password" name="password" required autocomplete="current-password" autofocus>
+    </label>
+    <button class="btn primary" type="submit">Unlock</button>
+  </form>
+  <p class="muted small">Forgot it? Run <code>gdrive-sync reset-password</code> in a terminal.</p>
+</section>
+{% endblock %}

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <title>{% block title %}GDrive Sync{% endblock %}</title>
+  <link rel="icon" href="{{ url_for('static', filename='icon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="{% block body_class %}{% endblock %}">
+  <header class="topbar">
+    <div class="brand">
+      <img src="{{ url_for('static', filename='icon.svg') }}" alt="" width="28" height="28">
+      <span>GDrive Sync</span>
+    </div>
+    {% if session.get('user') %}
+    <div class="topbar-right">
+      <span id="account-email" class="muted"></span>
+      <form method="post" action="{{ url_for('logout') }}">
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        <button class="btn ghost small" type="submit">Lock</button>
+      </form>
+    </div>
+    {% endif %}
+  </header>
+  <main class="container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for cat, msg in messages %}
+        <div class="flash {{ cat }}">{{ msg }}</div>
+      {% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="footer muted">GDrive Sync {{ version }} · listening on 127.0.0.1 only</footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

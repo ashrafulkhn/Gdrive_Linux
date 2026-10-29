@@ -1,0 +1,134 @@
+:root {
+  --bg: #f4f6f9;
+  --card: #ffffff;
+  --text: #1c2430;
+  --muted: #5d6878;
+  --border: #dfe4ea;
+  --accent: #1a73e8;
+  --accent-text: #ffffff;
+  --ok: #188038;
+  --warn: #b06000;
+  --warn-bg: #fff6e5;
+  --danger: #c5221f;
+  --danger-bg: #fdecea;
+  --ok-bg: #e6f4ea;
+  --radius: 12px;
+  --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .08);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12151a;
+    --card: #1b2028;
+    --text: #e6e9ee;
+    --muted: #9aa4b2;
+    --border: #2c333e;
+    --accent: #8ab4f8;
+    --accent-text: #0b1a33;
+    --ok: #81c995;
+    --warn: #fdd663;
+    --warn-bg: #3a2f12;
+    --danger: #f28b82;
+    --danger-bg: #3c1f1d;
+    --ok-bg: #18301f;
+    --shadow: none;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Ubuntu, Cantarell, sans-serif;
+}
+a { color: var(--accent); }
+code, pre, .mono { font-family: ui-monospace, "Ubuntu Mono", monospace; }
+pre { background: var(--bg); padding: 10px 12px; border-radius: 8px; overflow-x: auto; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.hidden { display: none !important; }
+
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 24px; background: var(--card); border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 17px; }
+.topbar-right { display: flex; align-items: center; gap: 12px; }
+.topbar-right form { margin: 0; }
+
+.container { max-width: 1040px; margin: 24px auto; padding: 0 16px; }
+.narrow .container { max-width: 460px; margin-top: 8vh; }
+.footer { text-align: center; font-size: 12px; padding: 24px 16px; }
+
+.card {
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 20px 24px; margin-bottom: 16px;
+}
+.card h1 { font-size: 21px; margin: 0 0 6px; }
+.card h2 { font-size: 16px; margin: 0 0 12px; }
+.card.warn { background: var(--warn-bg); border-color: var(--warn); }
+.step { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); font-weight: 600; }
+.howto li { margin-bottom: 4px; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.grid > .card { margin-bottom: 0; }
+.grid + .card, .grid + section { margin-top: 16px; }
+.form-grid { align-items: end; margin-bottom: 12px; }
+.stack { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+.narrow-form { max-width: 380px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; }
+label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 500; }
+input[type=text], input[type=password], input[type=number] {
+  font: inherit; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text);
+}
+input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+details { margin-top: 12px; }
+summary { cursor: pointer; color: var(--accent); font-size: 14px; }
+
+.btn {
+  font: inherit; font-weight: 500; cursor: pointer; padding: 8px 16px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--card); color: var(--text);
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.btn.danger { color: var(--danger); border-color: var(--danger); }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.small { padding: 5px 12px; font-size: 13px; }
+.btn.big { padding: 12px 22px; font-size: 16px; }
+.btn:disabled { opacity: .5; cursor: default; }
+
+.flash { padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; border: 1px solid var(--border); }
+.flash.error { background: var(--danger-bg); border-color: var(--danger); }
+.flash.ok { background: var(--ok-bg); border-color: var(--ok); }
+
+.status-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.status-head .actions { margin-left: auto; display: flex; gap: 8px; }
+.status-icon { width: 44px; height: 44px; border-radius: 50%; background: var(--border); flex: none; position: relative; }
+.status-icon::after { content: ""; position: absolute; inset: 14px; border-radius: 50%; background: var(--card); }
+.status-icon.idle { background: var(--ok); }
+.status-icon.syncing { background: conic-gradient(var(--accent) 0 70%, var(--border) 0); animation: spin 1s linear infinite; }
+.status-icon.paused, .status-icon.disconnected, .status-icon.offline { background: var(--muted); }
+.status-icon.attention { background: var(--warn); }
+.status-icon.error, .status-icon.auth_error { background: var(--danger); }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .status-icon.syncing { animation: none; } }
+
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 24px; margin: 20px 0 0; }
+.facts dt { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.facts dd { margin: 2px 0 0; word-break: break-all; }
+.bar { height: 6px; border-radius: 3px; background: var(--border); margin-top: 6px; overflow: hidden; }
+.bar > div { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+
+.activity { list-style: none; padding: 0; margin: 0; max-height: 420px; overflow-y: auto; }
+.activity li { display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; align-items: baseline; }
+.activity li:last-child { border-bottom: 0; }
+.activity .kind { flex: none; width: 70px; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.activity .kind.up { color: var(--accent); }
+.activity .kind.down { color: var(--ok); }
+.activity .kind.conflict, .activity .kind.delete { color: var(--warn); }
+.activity .kind.error { color: var(--danger); }
+.activity .path { word-break: break-all; flex: 1; }
+.activity .when { flex: none; color: var(--muted); font-size: 12px; }
+.activity .sub { display: block; color: var(--muted); }

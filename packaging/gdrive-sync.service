@@ -1,0 +1,22 @@
+[Unit]
+Description=GDrive Sync - two-way Google Drive sync
+Documentation=file://@SRC_DIR@/README.md
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@VENV@/bin/gdrive-sync run
+Restart=on-failure
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+# everything the service creates is readable by you only
+UMask=0077
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=graphical-session.target

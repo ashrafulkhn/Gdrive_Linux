@@ -1,0 +1,10 @@
+I have been facing issues with Google drive sync with Ubuntu,
+I have used the Ubuntu online account option in the setting and it shows the drive but its laggy.
+
+I want to develop my own clinet application which can run Linux and provide the access to google drive files available to local and to drive with two way sync.
+
+The sync should work seemlessly like google drive in Windows works.
+
+Give a autostart script. Login page to give access. Run ui on localhost to some port defined by you. (Your suggestion is welcome)
+
+Make sure that security parameters are taken care.

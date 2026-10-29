@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gdrive-sync"
+version = "1.0.0"
+description = "Two-way Google Drive sync client for Linux with a local web dashboard"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "flask>=3.0,<4",
+    "waitress>=3.0.1,<4",
+    "requests>=2.32.3,<3",
+    "watchdog>=4.0,<7",
+    "keyring>=25,<26",
+]
+
+[project.scripts]
+gdrive-sync = "gdrive_sync.__main__:main"
+
+[tool.setuptools]
+packages = ["gdrive_sync"]
+
+[tool.setuptools.package-data]
+gdrive_sync = ["templates/*.html", "static/*"]

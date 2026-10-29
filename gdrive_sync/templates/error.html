@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Error · GDrive Sync{% endblock %}
+{% block body_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Request blocked ({{ code }})</h1>
+  <p>{{ message }}</p>
+  <p><a href="/">Back to the dashboard</a></p>
+</section>
+{% endblock %}

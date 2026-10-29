@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Set up · GDrive Sync{% endblock %}
+{% block body_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Welcome</h1>
+  {% if token_ok %}
+  <p class="muted">Create a password for this dashboard. It keeps other users and programs on
+    this computer from controlling your sync. This is <strong>not</strong> your Google password.</p>
+  <form method="post" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="token" value="{{ token }}">
+    <label>New password
+      <input type="password" name="password" minlength="{{ min_len }}" required autocomplete="new-password" autofocus>
+    </label>
+    <label>Confirm password
+      <input type="password" name="confirm" minlength="{{ min_len }}" required autocomplete="new-password">
+    </label>
+    <button class="btn primary" type="submit">Create password</button>
+  </form>
+  {% else %}
+  <p>To protect first-time setup, this page needs the one-time link created on your computer.</p>
+  <p>Open it with the <strong>GDrive Sync</strong> app launcher, or run:</p>
+  <pre>~/.local/share/gdrive-sync/venv/bin/gdrive-sync open</pre>
+  {% endif %}
+</section>
+{% endblock %}

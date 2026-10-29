@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if not has_client %}
+<section class="card">
+  <span class="step">Step 1 of 2</span>
+  <h1>Add your Google API client</h1>
+  <p class="muted">Google requires every app that reads Drive to have its own OAuth client. You create
+    it once, it stays in your Google account, and only this computer uses it.</p>
+  <ol class="howto">
+    <li>Open <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener noreferrer">Google Cloud Console</a> and create a project.</li>
+    <li>Enable the <a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" rel="noopener noreferrer">Google Drive API</a>.</li>
+    <li>Under <em>Google Auth Platform → Branding/Audience</em>, choose <strong>External</strong>, add your e-mail as a test user, then press <strong>Publish app</strong>. Apps left in "Testing" lose their login every 7 days.</li>
+    <li>Under <em>Clients</em>, create a client of type <strong>Desktop app</strong> and download its JSON.</li>
+  </ol>
+  <form method="post" action="{{ url_for('google_client') }}" enctype="multipart/form-data" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label>Client JSON file
+      <input type="file" name="client_json" accept="application/json,.json">
+    </label>
+    <details>
+      <summary>…or paste the values</summary>
+      <div class="stack">
+        <label>Client ID <input type="text" name="client_id" value="{{ client_id }}" autocomplete="off" spellcheck="false"></label>
+        <label>Client secret <input type="password" name="client_secret" autocomplete="off"></label>
+      </div>
+    </details>
+    <button class="btn primary" type="submit">Save client</button>
+  </form>
+</section>
+
+{% elif not connected %}
+<section class="card">
+  <span class="step">Step 2 of 2</span>
+  <h1>Connect your Google account</h1>
+  {% if auth_error %}<div class="flash error">{{ auth_error }}</div>{% endif %}
+  <p class="muted">You will be sent to Google to sign in. GDrive Sync asks only for Google Drive access.
+    Your password never passes through this app. The login is kept in your {{ token_backend }}.</p>
+  <p class="muted small">Google may say the app "isn't verified", because you created it yourself.
+    Choose <em>Advanced → Go to (your app)</em> to continue.</p>
+  <form method="post" action="{{ url_for('google_connect') }}">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <button class="btn primary big" type="submit">Sign in with Google</button>
+  </form>
+  <details class="small muted"><summary>Change OAuth client</summary>
+    <form method="post" action="{{ url_for('google_client') }}" enctype="multipart/form-data" class="stack">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <input type="file" name="client_json" accept="application/json,.json">
+      <button class="btn small" type="submit">Replace client</button>
+    </form>
+  </details>
+</section>
+
+{% else %}
+<section class="card status-card" id="status-card">
+  <div class="status-head">
+    <div class="status-icon" id="status-icon" aria-hidden="true"></div>
+    <div>
+      <h1 id="status-title">Loading…</h1>
+      <p class="muted" id="status-detail"></p>
+    </div>
+    <div class="actions">
+      <button class="btn" id="btn-sync" type="button">Sync now</button>
+      <button class="btn" id="btn-pause" type="button">Pause</button>
+    </div>
+  </div>
+  <dl class="facts">
+    <div><dt>Folder</dt><dd id="fact-folder">{{ sync_dir }}</dd></div>
+    <div><dt>Items in sync</dt><dd id="fact-count">-</dd></div>
+    <div><dt>Last checked</dt><dd id="fact-last">-</dd></div>
+    <div><dt>Storage</dt><dd><span id="fact-quota">-</span><div class="bar"><div id="quota-bar"></div></div></dd></div>
+  </dl>
+</section>
+
+<section class="card warn hidden" id="mass-delete">
+  <h2>Confirm large deletion</h2>
+  <p><span id="md-count"></span> items were removed from your local folder. To protect your Drive,
+    they have <strong>not</strong> been deleted in Drive yet.</p>
+  <ul id="md-examples" class="mono small"></ul>
+  <div class="row">
+    <button class="btn danger" id="btn-confirm-delete" type="button">Yes, move them to Drive trash</button>
+    <button class="btn" id="btn-restore" type="button">No, restore them from Drive</button>
+  </div>
+</section>
+
+<div class="grid">
+  <section class="card">
+    <h2>Recent activity</h2>
+    <ul class="activity" id="activity"><li class="muted">Nothing yet.</li></ul>
+  </section>
+  <section class="card">
+    <h2>Conflicts</h2>
+    <p class="muted small">When a file changes in both places, the Drive version keeps the original
+      name and your version is saved beside it, so nothing is lost.</p>
+    <ul class="activity" id="conflicts"><li class="muted">No conflicts.</li></ul>
+  </section>
+</div>
+{% endif %}
+
+{% if session.get('user') %}
+<section class="card">
+  <h2>Settings</h2>
+  <form method="post" action="{{ url_for('settings') }}" class="grid form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label>Sync folder
+      <input type="text" name="sync_dir" value="{{ sync_dir }}" spellcheck="false">
+    </label>
+    <label>Check Drive for changes every (seconds)
+      <input type="number" name="poll_interval" min="10" max="3600" value="{{ poll_interval }}">
+    </label>
+    <div><button class="btn" type="submit">Save settings</button></div>
+  </form>
+
+  <details>
+    <summary>Change dashboard password</summary>
+    <form method="post" action="{{ url_for('change_password') }}" class="stack narrow-form">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <label>Current password <input type="password" name="current" required autocomplete="current-password"></label>
+      <label>New password <input type="password" name="new" required minlength="10" autocomplete="new-password"></label>
+      <button class="btn small" type="submit">Change password</button>
+    </form>
+  </details>
+
+  {% if connected %}
+  <details>
+    <summary>Advanced</summary>
+    <div class="stack narrow-form">
+      <p class="muted small">Re-sync from scratch forgets the sync state and matches every file again by
+        checksum. Missing files are downloaded again, and nothing is deleted.</p>
+      <button class="btn small" id="btn-resync" type="button">Re-sync from scratch</button>
+      <form method="post" action="{{ url_for('google_disconnect') }}" id="disconnect-form">
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        <p class="muted small">Disconnecting revokes this app's access to your Google account. Local files are kept.</p>
+        <button class="btn small danger" type="submit">Disconnect Google account</button>
+      </form>
+    </div>
+  </details>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+{% endblock %}

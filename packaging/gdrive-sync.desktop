@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=GDrive Sync
+Comment=Two-way Google Drive sync dashboard
+Exec=@VENV@/bin/gdrive-sync open
+Icon=@ICON@
+Terminal=false
+Categories=Network;FileTransfer;
+Keywords=google;drive;sync;cloud;
