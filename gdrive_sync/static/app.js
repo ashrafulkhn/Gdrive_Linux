@@ -71,6 +71,7 @@
     $("btn-pause").dataset.paused = s.paused ? "1" : "";
     $("fact-folder").textContent = s.sync_dir;
     $("fact-count").textContent = s.files_tracked.toLocaleString();
+    $("fact-drives").textContent = s.shared_drives.toLocaleString();
     $("fact-last").textContent = ago(s.last_sync);
     $("fact-pending").textContent = s.pending_changes ? s.pending_changes.toLocaleString() + " change(s)" : "Nothing";
     $("fact-cache").textContent = `${fmtBytes(s.cached_bytes)} downloaded` + (s.keep_all_offline ? " (keeping everything)" : ` · limit ${fmtBytes(s.cache_limit)}`);
