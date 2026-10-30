@@ -132,3 +132,8 @@ summary { cursor: pointer; color: var(--accent); font-size: 14px; }
 .activity .path { word-break: break-all; flex: 1; }
 .activity .when { flex: none; color: var(--muted); font-size: 12px; }
 .activity .sub { display: block; color: var(--muted); }
+
+.legend { list-style: none; padding: 0; margin: 0 0 8px; display: grid; gap: 8px; }
+.legend li { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; }
+.legend img { flex: none; margin-top: 1px; }
+label.check { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; font-size: 14px; grid-column: 1 / -1; }

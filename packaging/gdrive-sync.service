@@ -1,5 +1,5 @@
 [Unit]
-Description=GDrive Sync - two-way Google Drive sync
+Description=GDrive Sync - Google Drive files on demand
 Documentation=file://@SRC_DIR@/README.md
 After=graphical-session.target
 PartOf=graphical-session.target
@@ -7,16 +7,21 @@ PartOf=graphical-session.target
 [Service]
 Type=simple
 ExecStart=@VENV@/bin/gdrive-sync run
-Restart=on-failure
-RestartSec=10
+# clean up the mount even if the process was killed
+ExecStopPost=-@VENV@/bin/gdrive-sync unmount
+Restart=always
+RestartSec=5
+# 75 = the folder was ejected in the file manager: stay stopped until the next login
+# (or until "GDrive Sync" is opened from the app menu)
+SuccessExitStatus=75
+RestartPreventExitStatus=75
+TimeoutStopSec=30
 Environment=PYTHONUNBUFFERED=1
 # everything the service creates is readable by you only
 UMask=0077
-NoNewPrivileges=yes
-LockPersonality=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-SystemCallArchitectures=native
+# Note: mounting uses the setuid helper fusermount3, so NoNewPrivileges= and the
+# seccomp options that imply it in user services (SystemCallFilter=, LockPersonality=,
+# RestrictRealtime=, ...) cannot be enabled here without breaking the mount.
 
 [Install]
 WantedBy=graphical-session.target

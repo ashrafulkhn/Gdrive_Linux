@@ -72,6 +72,9 @@
     $("fact-folder").textContent = s.sync_dir;
     $("fact-count").textContent = s.files_tracked.toLocaleString();
     $("fact-last").textContent = ago(s.last_sync);
+    $("fact-pending").textContent = s.pending_changes ? s.pending_changes.toLocaleString() + " change(s)" : "Nothing";
+    $("fact-cache").textContent = `${fmtBytes(s.cached_bytes)} downloaded` + (s.keep_all_offline ? " (keeping everything)" : ` · limit ${fmtBytes(s.cache_limit)}`);
+    $("cache-bar").style.width = s.cache_limit ? Math.min(100, (100 * s.cached_bytes) / s.cache_limit).toFixed(1) + "%" : "0";
     if (s.account) {
       const email = $("account-email");
       if (email) email.textContent = s.account.email || "";
@@ -120,9 +123,9 @@
   $("btn-sync").addEventListener("click", () => post("/api/sync-now"));
   $("btn-pause").addEventListener("click", (e) => post(e.target.dataset.paused ? "/api/resume" : "/api/pause"));
   $("btn-confirm-delete").addEventListener("click", () => post("/api/confirm-deletes", "Move these items to the Google Drive trash?"));
-  $("btn-restore").addEventListener("click", () => post("/api/resync", "Download the missing items again from Drive?"));
+  $("btn-restore").addEventListener("click", () => post("/api/restore-deletes"));
   const resync = $("btn-resync");
-  if (resync) resync.addEventListener("click", () => post("/api/resync", "Forget the sync state and re-match every file?"));
+  if (resync) resync.addEventListener("click", () => post("/api/resync", "Re-read everything from Drive and empty the local cache?"));
 
   refresh();
   setInterval(refresh, 2500);

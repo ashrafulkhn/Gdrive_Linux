@@ -66,20 +66,42 @@
   </div>
   <dl class="facts">
     <div><dt>Folder</dt><dd id="fact-folder">{{ sync_dir }}</dd></div>
-    <div><dt>Items in sync</dt><dd id="fact-count">-</dd></div>
+    <div><dt>Files and folders</dt><dd id="fact-count">-</dd></div>
+    <div><dt>On this computer</dt><dd><span id="fact-cache">-</span><div class="bar"><div id="cache-bar"></div></div></dd></div>
+    <div><dt>Google Drive storage</dt><dd><span id="fact-quota">-</span><div class="bar"><div id="quota-bar"></div></div></dd></div>
+    <div><dt>Waiting to upload</dt><dd id="fact-pending">-</dd></div>
     <div><dt>Last checked</dt><dd id="fact-last">-</dd></div>
-    <div><dt>Storage</dt><dd><span id="fact-quota">-</span><div class="bar"><div id="quota-bar"></div></div></dd></div>
   </dl>
+</section>
+
+<section class="card">
+  <h2>How files appear in your Drive folder</h2>
+  <ul class="legend">
+    <li><img src="{{ url_for('static', filename='emblems/emblem-gdrive-cloud.svg') }}" alt="" width="20" height="20"><span><strong>Online only.</strong> Listed but not downloaded; it downloads when you open it. Takes no disk space.</span></li>
+    <li><img src="{{ url_for('static', filename='emblems/emblem-gdrive-local.svg') }}" alt="" width="20" height="20"><span><strong>On this computer and in Drive.</strong> Opened recently and kept in the cache. May be removed again if space runs low.</span></li>
+    <li><img src="{{ url_for('static', filename='emblems/emblem-gdrive-pinned.svg') }}" alt="" width="20" height="20"><span><strong>Always available offline.</strong> You chose to keep it, so it is never removed.</span></li>
+    <li><img src="{{ url_for('static', filename='emblems/emblem-gdrive-syncing.svg') }}" alt="" width="20" height="20"><span><strong>Syncing.</strong> Uploading or downloading right now.</span></li>
+    <li><img src="{{ url_for('static', filename='emblems/emblem-gdrive-error.svg') }}" alt="" width="20" height="20"><span><strong>Problem.</strong> See recent activity below.</span></li>
+  </ul>
+  {% if integration == "ok" %}
+  <p class="muted small">Right-click any file or folder in Files to choose <em>Make available offline</em>,
+    <em>Free up space</em> or <em>Open in Google Drive</em>.</p>
+  {% elif integration == "missing-package" %}
+  <div class="flash error">To see these icons in the Files app, install the Nautilus Python support once, then restart Files:
+    <pre>sudo apt install python3-nautilus &amp;&amp; nautilus -q</pre></div>
+  {% else %}
+  <div class="flash error">The Files integration is not installed. Re-run <code>./install.sh</code>.</div>
+  {% endif %}
 </section>
 
 <section class="card warn hidden" id="mass-delete">
   <h2>Confirm large deletion</h2>
-  <p><span id="md-count"></span> items were removed from your local folder. To protect your Drive,
+  <p><span id="md-count"></span> files were deleted from your Drive folder at once. To protect your Drive,
     they have <strong>not</strong> been deleted in Drive yet.</p>
   <ul id="md-examples" class="mono small"></ul>
   <div class="row">
     <button class="btn danger" id="btn-confirm-delete" type="button">Yes, move them to Drive trash</button>
-    <button class="btn" id="btn-restore" type="button">No, restore them from Drive</button>
+    <button class="btn" id="btn-restore" type="button">No, bring them back</button>
   </div>
 </section>
 
@@ -102,11 +124,18 @@
   <h2>Settings</h2>
   <form method="post" action="{{ url_for('settings') }}" class="grid form-grid">
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-    <label>Sync folder
+    <label>Drive folder
       <input type="text" name="sync_dir" value="{{ sync_dir }}" spellcheck="false">
+    </label>
+    <label>Space for recently opened files (GB)
+      <input type="number" name="cache_limit_gb" min="0.1" step="0.1" value="{{ cache_limit_gb }}">
     </label>
     <label>Check Drive for changes every (seconds)
       <input type="number" name="poll_interval" min="10" max="3600" value="{{ poll_interval }}">
+    </label>
+    <label class="check">
+      <input type="checkbox" name="keep_all_offline" {% if keep_all_offline %}checked{% endif %}>
+      <span>Keep all files on this computer (mirror). Uses as much disk space as your Drive.</span>
     </label>
     <div><button class="btn" type="submit">Save settings</button></div>
   </form>
@@ -125,8 +154,8 @@
   <details>
     <summary>Advanced</summary>
     <div class="stack narrow-form">
-      <p class="muted small">Re-sync from scratch forgets the sync state and matches every file again by
-        checksum. Missing files are downloaded again, and nothing is deleted.</p>
+      <p class="muted small">Re-sync from scratch re-reads the file list from Drive and empties the local cache.
+        Changes that are not uploaded yet are first copied to a "GDrive unsynced files" folder in your home folder.</p>
       <button class="btn small" id="btn-resync" type="button">Re-sync from scratch</button>
       <form method="post" action="{{ url_for('google_disconnect') }}" id="disconnect-form">
         <input type="hidden" name="csrf" value="{{ csrf_token() }}">

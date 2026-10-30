@@ -29,6 +29,10 @@ TIMEOUT = (15, 120)
 RATE_REASONS = {"rateLimitExceeded", "userRateLimitExceeded"}
 
 
+def guess_mime(name):
+    return mimetypes.guess_type(name)[0] or "application/octet-stream"
+
+
 class DriveError(Exception):
     def __init__(self, message, status=None, reason=None):
         super().__init__(message)
@@ -165,15 +169,14 @@ class DriveClient:
         self._request("PATCH", f"{API}/files/{file_id}", params={"fields": "id"}, json={"trashed": True})
 
     # -- content ------------------------------------------------------------
-    def upload_new(self, local_path, name, parent_id):
-        return self._upload("POST", None, local_path, {"name": name, "parents": [parent_id]})
+    def upload_new(self, local_path, name, parent_id, mime=None):
+        return self._upload("POST", None, local_path, {"name": name, "parents": [parent_id]}, mime or guess_mime(name))
 
-    def upload_update(self, file_id, local_path):
-        return self._upload("PATCH", file_id, local_path, {})
+    def upload_update(self, file_id, local_path, mime=None):
+        return self._upload("PATCH", file_id, local_path, {}, mime or guess_mime(str(local_path)))
 
-    def _upload(self, method, file_id, local_path, metadata):
+    def _upload(self, method, file_id, local_path, metadata, mime):
         size = os.path.getsize(local_path)
-        mime = mimetypes.guess_type(str(local_path))[0] or "application/octet-stream"
         target = f"{UPLOAD_API}/files" + (f"/{file_id}" if file_id else "")
         if size <= SIMPLE_UPLOAD_LIMIT:
             boundary = "gdsync" + secrets.token_hex(12)
@@ -241,6 +244,24 @@ class DriveClient:
                     offset = int(rng.split("-")[1]) + 1 if rng else 0
                 except requests.RequestException:
                     pass
+
+    def download_range(self, file_id, start, end):
+        """Return bytes ``start..end`` (inclusive) of a file without downloading all of it."""
+        resp = self._request(
+            "GET",
+            f"{API}/files/{file_id}",
+            ok=(200, 206),
+            params={"alt": "media"},
+            headers={"Range": f"bytes={start}-{end}"},
+            stream=True,
+        )
+        with resp:
+            data = b""
+            for chunk in resp.iter_content(64 * 1024):
+                data += chunk
+                if len(data) > end - start:
+                    break
+        return data[: end - start + 1]
 
     def download(self, file_id, dest, expected_md5=None):
         """Stream file content to ``dest`` and return its md5 hex digest."""

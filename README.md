@@ -1,134 +1,111 @@
 # GDrive Sync for Linux
 
-A two-way Google Drive sync client for Ubuntu and other Linux desktops. It
-works like Google Drive for desktop does on Windows (in "mirror" mode): a
-normal folder, `~/GoogleDrive`, that stays in sync with **My Drive** in both
-directions. There is a local web dashboard at **http://127.0.0.1:8642**, and
-the client starts automatically when you log in.
+Google Drive on Ubuntu, like Google Drive for desktop on Windows. Your whole
+**My Drive** appears in `~/GoogleDrive` right away, but a file downloads only
+when you open it. Changes sync both ways, and status icons in Files show
+where each file is.
 
-- Edit, add, rename, move or delete files locally → the change appears in Drive within seconds (inotify).
-- Changes made in Drive (web, phone, other PCs) → they appear locally within 30 s (Drive Changes API).
-- Google Docs/Sheets/Slides appear as `.gdoc`/`.gsheet`/`.gslides` files. Double-clicking one opens it in your browser.
-- Conflicts never lose data. If a file changed on both sides, your local version is kept beside it as `name (conflict <host> <date>).ext`.
-- Deletions are recoverable. Local deletions go to the **Drive trash**, and remote deletions go to your **desktop Trash**.
+| Icon | Meaning |
+|---|---|
+| <img src="gdrive_sync/static/emblems/emblem-gdrive-cloud.svg" width="16"> | Online only (no disk space used; downloads when opened) |
+| <img src="gdrive_sync/static/emblems/emblem-gdrive-local.svg" width="16"> | On this computer and in Drive |
+| <img src="gdrive_sync/static/emblems/emblem-gdrive-pinned.svg" width="16"> | Always available offline |
+| <img src="gdrive_sync/static/emblems/emblem-gdrive-syncing.svg" width="16"> | Syncing |
+| <img src="gdrive_sync/static/emblems/emblem-gdrive-error.svg" width="16"> | Problem (details in the dashboard) |
 
-## Install
+## 1. Install
+
+Tested on Ubuntu 24.04 (GNOME).
 
 ```bash
-git clone <this repo> && cd Gdrive_Linux
-./install.sh            # or: GDRIVE_SYNC_DIR=/data/Drive ./install.sh
+sudo apt install python3-venv fuse3 python3-nautilus
+git clone https://github.com/ashrafulkhn/Gdrive_Linux.git
+cd Gdrive_Linux
+./install.sh
 ```
 
-The installer runs as your normal user and needs no `sudo`. If it complains,
-install `python3-venv` (`sudo apt install python3-venv`).
+The installer sets up an autostart service, the Files integration and an app
+menu entry, **GDrive Sync**. It then prints a setup link. If the browser
+doesn't open, paste that link into Firefox.
 
-The installer:
+On the setup page, create a **dashboard password**. It protects the local
+dashboard at http://127.0.0.1:8642 and is not your Google password.
 
-1. creates a virtualenv in `~/.local/share/gdrive-sync/venv`,
-2. installs a **systemd user service**, `gdrive-sync.service`, that starts with your desktop session and restarts on failure,
-3. adds a "GDrive Sync" app launcher, a `.gdoc` file handler, and a "Google Drive" bookmark in Files,
-4. opens the dashboard so you can finish setup.
+## 2. Google Cloud Console (one time, about 5 min)
 
-### First-time setup (about 5 minutes)
+Sign in with the Google account whose Drive you want to sync.
 
-1. **Dashboard password.** The browser opens a one-time setup link. Choose a password for the dashboard. It stops other users and programs on your computer from controlling the sync. It is not your Google password.
-2. **Google API client.** Google requires every Drive app to have an OAuth client. You create your own, so no third party ever sits between you and your data:
-   1. Go to [console.cloud.google.com](https://console.cloud.google.com/projectcreate) and create a project.
-   2. Enable the **Google Drive API**.
-   3. In **Google Auth Platform → Audience**, choose **External** and add your Gmail address as a test user. Then click **Publish app**.
-      > ⚠️ If the app stays in *Testing*, Google expires the login every 7 days. Once published, Google shows an "unverified app" warning at sign-in, because only you use it. Click *Advanced → Go to …* to continue.
-   4. In **Clients**, click **Create client**, choose **Desktop app**, and download the JSON.
-   5. Upload that JSON in the dashboard.
-3. **Sign in with Google.** Grant Drive access. The initial sync starts right away.
+1. **Create a project:** https://console.cloud.google.com/projectcreate
+   - Name it `GDrive Sync`, then click **Create**. Keep it selected in the top bar.
+2. **Enable the Drive API:** https://console.cloud.google.com/apis/library/drive.googleapis.com
+   - Click **Enable**.
+3. **Configure sign-in:** https://console.cloud.google.com/auth/overview
+   - Click **Get started**.
+   - Enter the app name and your email. Choose **External** as the audience.
+   - Enter a contact email, agree, then click **Create**.
+4. **Publish the app:** https://console.cloud.google.com/auth/audience
+   - Click **Publish app**, then **Confirm**.
+   - If you skip this, Google signs you out every 7 days.
+5. **Create the client:** https://console.cloud.google.com/auth/clients
+   - Click **Create client**.
+   - Set the type to **Desktop app**, then click **Create**.
+   - Click **Download JSON** right away. Google shows the secret only once.
 
-## Daily use
+## 3. Connect
 
-| What | How |
+In the dashboard (http://127.0.0.1:8642):
+
+1. **Step 1:** choose the downloaded `client_secret_….json`, then click **Save client**.
+2. **Step 2:** click **Sign in with Google** and pick your account.
+   - Google warns that the app isn't verified, because you created it yourself. Click **Advanced → Go to GDrive Sync**.
+   - **Tick the Google Drive permission**, then click **Continue**.
+
+Your Drive appears in `~/GoogleDrive` (Files sidebar: **Google Drive**)
+within seconds. Delete the JSON from `~/Downloads` afterwards.
+
+## 4. Daily use
+
+| Task | How |
 |---|---|
-| Dashboard | App menu → **GDrive Sync**, or `gdrive-sync open` |
-| Service status / logs | `systemctl --user status gdrive-sync` · `journalctl --user -u gdrive-sync -f` |
-| Stop / start | `systemctl --user stop gdrive-sync` / `start` |
-| Forgot dashboard password | `gdrive-sync reset-password`, then `systemctl --user restart gdrive-sync && gdrive-sync open` |
-| Uninstall | `./uninstall.sh` (keeps settings) or `./uninstall.sh --purge` (also revokes and deletes the Google login) |
+| Keep a file or folder offline | Right-click → **Make available offline** |
+| Free disk space | Right-click → **Free up space** (stays in Drive) |
+| Download everything (mirror) | Dashboard → Settings → *Keep all files on this computer* |
+| Open the dashboard | App menu → **GDrive Sync** |
 
-The dashboard shows the sync status, storage use, recent activity and
-conflicts. It also has Pause/Resume, Sync now, settings (folder, check
-interval), password change and Disconnect.
+## 5. Stop, unmount, log out
 
-### Port
-
-The UI uses port **8642**. It is easy to remember, and no common service
-uses it. To change it, set `"port"` in `~/.config/gdrive-sync/config.json`,
-or set `GDRIVE_SYNC_PORT` in the service environment. The OAuth redirect URI
-follows the port automatically, because Desktop OAuth clients accept any
-loopback port.
-
-## Security
-
-| Area | What is done |
+| Action | What happens |
 |---|---|
-| Network exposure | The server binds to `127.0.0.1` only, so nothing on your LAN can reach it. |
-| DNS-rebinding | Requests are refused unless the `Host` is `127.0.0.1:8642` or `localhost:8642`. |
-| Dashboard access | A local password (scrypt-hashed), with exponential lockout after failed attempts. The session cookie is signed, `HttpOnly`, `SameSite=Lax` and lasts 12 h. |
-| First-run hijack | Setup needs a one-time token from a `0600` file that only your user can read. A different local user can't claim the dashboard first. |
-| CSRF / clickjacking | Every POST needs a CSRF token and a same-origin `Origin`. The page has a strict CSP (no inline scripts), `X-Frame-Options: DENY` and `no-referrer`. |
-| XSS | File names come from Drive and may be hostile. Templates auto-escape them, and the JavaScript only uses `textContent`. |
-| Google login | OAuth 2.0 authorization code flow with **PKCE (S256)**, a single-use `state`, and a loopback redirect. The app never sees your Google password. |
-| Token storage | Only the refresh token is stored, in **GNOME Keyring** (Secret Service). Without a keyring it goes to a `0600` file. Access tokens are kept in memory only. Disconnect **revokes** the token at Google. |
-| Scope | `drive` only, with no profile/e-mail scopes. Full Drive scope is needed to sync files this app didn't create. |
-| Local files | The service runs with `UMask=0077`. The sync folder is forced to `0700`, and config, database and logs are `0600`. |
-| Path safety | Drive names containing `/`, `..` etc. are sanitized. Symlinks, FIFOs and sockets are never followed or uploaded. Files outside the sync folder can't be reached. |
-| Data safety | Downloads are verified by MD5 and written atomically. If the sync folder disappears (for example, an unmounted disk), sync halts instead of deleting Drive. If more than 50 items vanish at once, deletion waits for your confirmation in the dashboard. |
-| `.gdoc` handler | Opens only `https://` URLs on Google Docs/Drive hosts, never arbitrary links. |
-| systemd hardening | `NoNewPrivileges`, `RestrictSUIDSGID`, `LockPersonality`, `RestrictRealtime` and a native syscall architecture only. |
+| **Log out / shut down** | The folder is unmounted automatically. Edits not yet uploaded are kept and sync at the next login. |
+| **Log in** | The folder mounts automatically. |
+| **Eject** "Google Drive" in Files | Sync stops until the next login. To mount it again now, open **GDrive Sync** from the app menu. |
+| Stop from a terminal | `systemctl --user stop gdrive-sync` |
+| Start from a terminal | `systemctl --user start gdrive-sync` |
+| Pause syncing, keep the folder | Dashboard → **Pause** |
+| Sign out of Google | Dashboard → Settings → Advanced → **Disconnect** (revokes access; files in Drive are untouched) |
 
-## How sync works
+## 6. Uninstall
 
+```bash
+./uninstall.sh           # keep settings and cache
+./uninstall.sh --purge   # also remove settings, cache and the Google login
 ```
-            inotify (watchdog)                 Drive Changes API (every 30 s)
-~/GoogleDrive ─────────┐                     ┌───────────── Google Drive
-                       ▼                     ▼
-                 local pass ──► SyncEngine ◄── remote pass
-                                  │
-                       state.db (last agreed state:
-                       id, path, md5, mtime, size, inode)
-```
-
-- **Initial sync** lists My Drive and builds the folder tree. Files that already exist locally with the same checksum are adopted without downloading.
-- **Local pass.** It scans the folder and compares it with `state.db`. A file whose path vanished but whose inode reappears elsewhere is treated as a **rename/move**, so it is moved in Drive, not re-uploaded. Edits are detected by mtime/size and confirmed by MD5. Before uploading an edit, the engine checks that the Drive copy hasn't changed too.
-- **Remote pass** applies Drive changes: new files, edits, renames/moves and removals.
-- Large files use resumable chunked uploads (8 MiB chunks). Network and API errors are retried with exponential backoff. If you are offline, the dashboard shows "Offline", and sync resumes when the network returns.
-- Temporary and lock files are ignored: `*.swp`, `*~`, `.~lock.*#`, `.goutputstream-*`, `*.part` and so on.
-
-## Limitations
-
-- It mirrors a full copy of **My Drive**, so you need enough disk space. There are no on-demand "streamed" files (that would need a FUSE filesystem).
-- **Shared drives** and **Shared with me** are not synced. Drive shortcuts are skipped too, because they can point anywhere. To sync a shared folder, move it into My Drive (if you can edit it).
-- Google Docs/Sheets/Slides are links, not editable office files.
-- No selective sync of sub-folders yet.
-- For very large folder trees (more than ~60k folders), raise the inotify limit:
-  `echo fs.inotify.max_user_watches=524288 | sudo tee /etc/sysctl.d/90-inotify.conf && sudo sysctl --system`.
-  Without it, the client falls back to periodic full scans.
 
 ## Troubleshooting
 
-- **"Google rejected the stored login"**: the app is still in *Testing* (7-day expiry), or access was revoked. Publish the app (setup step 2.3), then sign in again.
-- **Service didn't start at login**: run `systemctl --user enable --now gdrive-sync` and check `journalctl --user -u gdrive-sync`.
-- **Want to rebuild state** (for example, after restoring a backup): Dashboard → Settings → Advanced → *Re-sync from scratch*. This re-matches files by checksum and deletes nothing.
+| Problem | Fix |
+|---|---|
+| Folder is empty | Google isn't connected yet. See step 3. |
+| No icons in Files | `sudo apt install python3-nautilus && nautilus -q` |
+| "Google rejected the stored login" | Publish the app (step 2.4), then sign in again. |
+| Forgot dashboard password | `gdrive-sync reset-password && systemctl --user restart gdrive-sync && gdrive-sync open` |
+| Logs | `journalctl --user -u gdrive-sync -f` |
 
-## Development
+## Security
 
-```bash
-python3 -m venv .venv && .venv/bin/pip install -e .
-.venv/bin/python -m unittest discover -s tests     # sync engine + web security tests
-GDRIVE_SYNC_PORT=18642 .venv/bin/gdrive-sync run -v
-```
+- The dashboard listens on `127.0.0.1` only. It is password-protected, with CSRF protection and a strict CSP.
+- Google sign-in uses OAuth with PKCE, and the login token is stored in GNOME Keyring. Only the Drive scope is requested.
+- The Drive folder, cache and settings are readable only by your user.
+- Deleted files go to the Drive trash. Mass deletions need confirmation, and both-side edits keep a conflict copy.
 
-Code layout: `gdrive_sync/`
-- `auth.py`: OAuth and keyring
-- `drive.py`: Drive REST client
-- `sync.py`: the engine
-- `db.py`: state store
-- `watcher.py`: inotify
-- `web.py`: dashboard
-- `security.py`: password hashing and login throttling
+Tests: `python3 -m unittest discover -s tests`

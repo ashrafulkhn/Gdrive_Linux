@@ -17,12 +17,12 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 SECRET_KEY_FILE = CONFIG_DIR / "secret_key"
 SETUP_TOKEN_FILE = CONFIG_DIR / "setup_token"
 TOKEN_FILE = CONFIG_DIR / "token.json"  # only used when no system keyring is available
-DB_FILE = DATA_DIR / "state.db"
+DB_FILE = DATA_DIR / "vfs.db"
+CACHE_DIR = DATA_DIR / "cache"  # downloaded file contents, named by inode
 LOG_FILE = DATA_DIR / "gdrive-sync.log"
 LOCK_FILE = DATA_DIR / "instance.lock"
 
 DEFAULT_IGNORE = [
-    ".gdsync-*",        # our own temporary download files
     "*.swp", "*.swx", "*.swo", "*~",
     ".~lock.*#",        # LibreOffice lock files
     ".goutputstream-*", # GTK atomic-save temp files
@@ -34,7 +34,7 @@ DEFAULTS = {
     "port": DEFAULT_PORT,
     "sync_dir": str(Path.home() / "GoogleDrive"),
     "poll_interval": 30,          # seconds between Drive change checks
-    "full_scan_interval": 600,    # seconds between full local rescans
+    "cache_limit_gb": 10,         # files you opened are kept up to this size (offline files don't count)
     "ui_password_hash": None,
     "client_id": None,
     "client_secret": None,

@@ -35,7 +35,14 @@ class MemStore:
         self.token = None
 
 
+class FakeStore:
+    def meta(self, key, default=None):
+        return default
+
+
 class FakeEngine:
+    store = FakeStore()
+
     def status(self):
         return {"state": "idle", "activity": [], "conflicts": [], "files_tracked": 0, "sync_dir": "/x"}
 
@@ -57,7 +64,8 @@ class WebTestCase(unittest.TestCase):
         self.config = Config(Path(tempfile.mkdtemp()) / "config.json")
         self.config.update(port=8642)
         self.auth = GoogleAuth(self.config, store=MemStore())
-        self.app = create_app(self.config, self.auth, FakeEngine())
+        self.restarts = []
+        self.app = create_app(self.config, self.auth, FakeEngine(), restart=lambda: self.restarts.append(1))
         self.client = self.app.test_client()
 
     def csrf(self, client=None):
@@ -106,6 +114,24 @@ class WebTestCase(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertTrue(self.config.get("paused"))
 
+    def test_browser_form_posts_carry_a_real_origin(self):
+        # Browsers send "Origin: null" on form posts from pages with Referrer-Policy: no-referrer,
+        # which would make every form fail the Origin check.
+        r = self.client.get(f"{BASE}/setup?token={self.token}")
+        self.assertEqual(r.headers["Referrer-Policy"], "same-origin")
+        r = self.client.post(
+            f"{BASE}/setup",
+            headers={"Origin": BASE},
+            data={"csrf": self.csrf(), "token": self.token, "password": "x" * 12, "confirm": "x" * 12},
+        )
+        self.assertEqual(r.status_code, 302)
+        self.assertTrue(self.config.get("ui_password_hash"))
+
+    def test_null_origin_is_rejected(self):
+        self.do_setup()
+        r = self.client.post(f"{BASE}/api/pause", headers={"X-CSRF-Token": self.csrf(), "Origin": "null"})
+        self.assertEqual(r.status_code, 403)
+
     def test_api_requires_login(self):
         self.do_setup()
         other = self.app.test_client()
@@ -124,6 +150,21 @@ class WebTestCase(unittest.TestCase):
         self.assertIn("script-src 'self'", r.headers["Content-Security-Policy"])
         self.assertEqual(r.headers["X-Frame-Options"], "DENY")
         self.assertIn("HttpOnly", r.headers.get("Set-Cookie", ""))
+
+    def test_settings_validate_and_move_folder_restarts(self):
+        self.do_setup()
+        token = self.csrf()
+        r = self.client.post(f"{BASE}/settings", data={"csrf": token, "poll_interval": "5", "cache_limit_gb": "10"})
+        self.assertEqual(self.config.get("poll_interval"), 30)
+        target = Path(tempfile.mkdtemp()) / "Drive"
+        self.client.post(f"{BASE}/settings", data={"csrf": token, "poll_interval": "60", "cache_limit_gb": "2.5",
+                                                   "sync_dir": str(target)})
+        self.assertEqual((self.config.get("poll_interval"), self.config.get("cache_limit_gb")), (60, 2.5))
+        self.assertEqual(self.config.get("sync_dir"), str(target))
+        self.assertEqual(self.restarts, [1])
+        self.client.post(f"{BASE}/settings", data={"csrf": token, "poll_interval": "60", "cache_limit_gb": "2.5",
+                                                   "sync_dir": str(Path.home())})
+        self.assertEqual(self.config.get("sync_dir"), str(target))
 
     def test_oauth_uses_pkce_and_checks_state(self):
         self.do_setup()

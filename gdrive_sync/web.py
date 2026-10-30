@@ -3,7 +3,11 @@
 import hmac
 import json
 import logging
+import os
 import secrets
+import signal
+import subprocess
+import threading
 from datetime import timedelta
 from pathlib import Path
 
@@ -17,9 +21,31 @@ from .security import MIN_PASSWORD_LENGTH, LoginLimiter, hash_password, verify_p
 log = logging.getLogger(__name__)
 
 PUBLIC_ENDPOINTS = {"setup", "login", "static"}
+NAUTILUS_PYTHON = Path("/usr/lib/x86_64-linux-gnu/nautilus/extensions-4/libnautilus-python.so")
+NAUTILUS_EXTENSION = Path.home() / ".local/share/nautilus-python/extensions/gdrive_sync_nautilus.py"
 
 
-def create_app(config, auth, engine):
+def restart_service():
+    """Have systemd restart us with the new settings (plain exit when run by hand)."""
+
+    def restart():
+        if os.environ.get("INVOCATION_ID"):  # running under systemd
+            subprocess.Popen(["systemctl", "--user", "restart", "gdrive-sync.service"], start_new_session=True)
+        else:
+            os.kill(os.getpid(), signal.SIGTERM)
+
+    threading.Timer(1.0, restart).start()
+
+
+def file_manager_integration():
+    if not NAUTILUS_EXTENSION.exists():
+        return "missing-extension"
+    if not any(NAUTILUS_PYTHON.parent.glob("libnautilus-python*.so")):
+        return "missing-package"
+    return "ok"
+
+
+def create_app(config, auth, engine, restart=restart_service):
     app = Flask(__name__)
     app.secret_key = read_or_create_secret(SECRET_KEY_FILE)
     app.config.update(
@@ -79,7 +105,9 @@ def create_app(config, auth, engine):
         )
         resp.headers["X-Content-Type-Options"] = "nosniff"
         resp.headers["X-Frame-Options"] = "DENY"
-        resp.headers["Referrer-Policy"] = "no-referrer"
+        # not "no-referrer": with that policy browsers send "Origin: null" on our own form
+        # posts, which the Origin check above (rightly) rejects
+        resp.headers["Referrer-Policy"] = "same-origin"
         resp.headers["Cross-Origin-Opener-Policy"] = "same-origin"
         resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
         if request.endpoint != "static":
@@ -164,6 +192,9 @@ def create_app(config, auth, engine):
             client_id=config.get("client_id") or "",
             sync_dir=str(config.sync_dir),
             poll_interval=config.get("poll_interval"),
+            cache_limit_gb=config.get("cache_limit_gb"),
+            keep_all_offline=engine.store.meta("keep_all_offline") == "1",
+            integration=file_manager_integration(),
             redirect_uri=redirect_uri,
             token_backend=auth.store.backend,
         )
@@ -228,26 +259,38 @@ def create_app(config, auth, engine):
     def settings():
         try:
             poll = int(request.form.get("poll_interval", config.get("poll_interval")))
+            cache_gb = float(request.form.get("cache_limit_gb", config.get("cache_limit_gb")))
         except ValueError:
-            poll = 0
+            poll, cache_gb = 0, -1
         if not 10 <= poll <= 3600:
             flash("Check interval must be between 10 and 3600 seconds.", "error")
             return redirect(url_for("index"))
-        updates = {"poll_interval": poll}
+        if not 0.1 <= cache_gb <= 100_000:
+            flash("Space for recently opened files must be between 0.1 and 100000 GB.", "error")
+            return redirect(url_for("index"))
+        updates = {"poll_interval": poll, "cache_limit_gb": cache_gb}
+        keep_all = request.form.get("keep_all_offline") == "on"
+        if keep_all != (engine.store.meta("keep_all_offline") == "1"):
+            engine.set_keep_all_offline(keep_all)
+            flash("All files will be downloaded and kept on this computer." if keep_all
+                  else "Files will be downloaded only when you open them.", "ok")
         new_dir = request.form.get("sync_dir", "").strip()
+        move = False
         if new_dir and Path(new_dir).expanduser() != config.sync_dir:
             path = Path(new_dir).expanduser()
-            home = Path.home()
-            forbidden = {Path("/"), home, CONFIG_DIR, DATA_DIR}
+            forbidden = {Path("/"), Path.home(), CONFIG_DIR, DATA_DIR}
             if not path.is_absolute() or path.resolve() in {p.resolve() for p in forbidden}:
                 flash("Choose a dedicated absolute folder (not / or your home folder).", "error")
                 return redirect(url_for("index"))
-            if path.exists() and not path.is_dir():
-                flash("That path exists and is not a folder.", "error")
+            if path.exists() and (not path.is_dir() or any(path.iterdir())):
+                flash("Choose a folder that is empty or does not exist yet.", "error")
                 return redirect(url_for("index"))
             updates["sync_dir"] = str(path)
-            flash("Sync folder changed. Drive will be synced into the new folder.", "ok")
+            move = True
         config.update(**updates)
+        if move:
+            flash(f"Moving your Drive folder to {updates['sync_dir']}. The service restarts; reload in a few seconds.", "ok")
+            restart()
         engine.sync_now()
         return redirect(url_for("index"))
 
@@ -282,6 +325,11 @@ def create_app(config, auth, engine):
     @app.post("/api/confirm-deletes")
     def api_confirm_deletes():
         engine.confirm_mass_delete()
+        return jsonify(ok=True)
+
+    @app.post("/api/restore-deletes")
+    def api_restore_deletes():
+        engine.restore_deleted()
         return jsonify(ok=True)
 
     @app.post("/api/resync")
