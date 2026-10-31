@@ -20,13 +20,15 @@ API = "https://www.googleapis.com/drive/v3"
 UPLOAD_API = "https://www.googleapis.com/upload/drive/v3"
 FOLDER_MIME = "application/vnd.google-apps.folder"
 SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
-FILE_FIELDS = "id,name,mimeType,parents,md5Checksum,size,modifiedTime,trashed,webViewLink"
+CAPABILITIES = "canEdit,canAddChildren,canRename,canTrash,canMoveItemWithinDrive,canDownload"
+FILE_FIELDS = f"id,name,mimeType,parents,md5Checksum,size,modifiedTime,trashed,webViewLink,capabilities({CAPABILITIES})"
 
 SIMPLE_UPLOAD_LIMIT = 5 * 1024 * 1024
 CHUNK_SIZE = 32 * 256 * 1024  # 8 MiB, must be a multiple of 256 KiB
 MAX_RETRIES = 6
 TIMEOUT = (15, 120)
 RATE_REASONS = {"rateLimitExceeded", "userRateLimitExceeded"}
+DENIED_REASONS = {"insufficientFilePermissions", "insufficientParentPermissions"}
 
 
 def guess_mime(name):
@@ -42,6 +44,11 @@ class DriveError(Exception):
 
 class NotFound(DriveError):
     pass
+
+
+def is_denied(e):
+    """Google refused the action because of your role on the file (retrying can't help)."""
+    return isinstance(e, DriveError) and e.status == 403 and e.reason in DENIED_REASONS
 
 
 def _reason(resp):
@@ -61,6 +68,8 @@ class DriveClient:
 
     # -- transport ----------------------------------------------------------
     def _request(self, method, url, *, ok=(200,), headers=None, data_factory=None, stream=False, **kw):
+        if "/files" in url or "/changes" in url:  # without this, shared drive items are invisible
+            kw["params"] = {**kw.get("params", {}), "supportsAllDrives": "true"}
         refreshed = False
         for attempt in range(MAX_RETRIES):
             hdrs = dict(headers or {})
@@ -106,8 +115,22 @@ class DriveClient:
     def get(self, file_id):
         return self._request("GET", f"{API}/files/{file_id}", params={"fields": FILE_FIELDS}).json()
 
-    def list_all(self):
-        """All non-trashed files visible to the user (filtered to My Drive by the caller)."""
+    def list_drives(self):
+        """The shared drives the user is a member of."""
+        drives, token = [], None
+        while True:
+            params = {"pageSize": 100, "fields": "nextPageToken,drives(id,name,capabilities(canAddChildren))"}
+            if token:
+                params["pageToken"] = token
+            body = self._request("GET", f"{API}/drives", params=params).json()
+            drives.extend(body.get("drives", []))
+            token = body.get("nextPageToken")
+            if not token:
+                return drives
+
+    def list_all(self, drive_id=None):
+        """All non-trashed files in one shared drive, or those visible to the user
+        outside shared drives (filtered to My Drive by the caller)."""
         files, token = [], None
         while True:
             params = {
@@ -116,6 +139,8 @@ class DriveClient:
                 "pageSize": 1000,
                 "spaces": "drive",
             }
+            if drive_id:
+                params.update(corpora="drive", driveId=drive_id, includeItemsFromAllDrives="true")
             if token:
                 params["pageToken"] = token
             body = self._request("GET", f"{API}/files", params=params).json()
@@ -124,23 +149,25 @@ class DriveClient:
             if not token:
                 return files
 
-    def start_page_token(self):
-        return self._request("GET", f"{API}/changes/startPageToken").json()["startPageToken"]
+    def start_page_token(self, drive_id=None):
+        params = {"driveId": drive_id} if drive_id else {}
+        return self._request("GET", f"{API}/changes/startPageToken", params=params).json()["startPageToken"]
 
-    def changes(self, page_token):
-        """Return (changes, new_start_page_token) since ``page_token``."""
+    def changes(self, page_token, drive_id=None):
+        """Return (changes, new_start_page_token) since ``page_token``, for My Drive or one shared drive."""
         out = []
+        scope = {"driveId": drive_id, "includeItemsFromAllDrives": "true"} if drive_id else {"restrictToMyDrive": "true"}
         while True:
             body = self._request(
                 "GET",
                 f"{API}/changes",
                 params={
+                    **scope,
                     "pageToken": page_token,
                     "pageSize": 1000,
                     "includeRemoved": "true",
-                    "restrictToMyDrive": "true",
                     "spaces": "drive",
-                    "fields": f"nextPageToken,newStartPageToken,changes(fileId,removed,file({FILE_FIELDS}))",
+                    "fields": f"nextPageToken,newStartPageToken,changes(changeType,fileId,removed,file({FILE_FIELDS}))",
                 },
             ).json()
             out.extend(body.get("changes", []))

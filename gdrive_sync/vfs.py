@@ -22,7 +22,17 @@ from pathlib import Path
 from mfusepy import FuseOSError, Operations, fuse_get_context
 
 from .engine import HEAD_BYTES, is_native, link_bytes
-from .store import ROOT
+from .store import (
+    CAP_ADD,
+    CAP_DOWNLOAD,
+    CAP_EDIT,
+    CAP_TRASH,
+    MY_DRIVE,
+    ROOT,
+    VIRTUAL_TRASH_FILES,
+    VIRTUAL_TRASH_INFO,
+    is_virtual,
+)
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +88,18 @@ class DriveFS(Operations):
         if not self.store.get(ROOT).remote_id:
             raise FuseOSError(errno.EROFS)  # not connected to Drive yet
 
+    @staticmethod
+    def _require(n, cap):
+        # the kernel enforces most of this from the mode bits; this covers what they can't express
+        if not n.caps & cap:
+            raise FuseOSError(errno.EACCES)
+
+    def _require_add(self, parent, name):
+        self._require(parent, CAP_ADD)
+        # the trash folders exist for one purpose: the note GNOME writes before moving a file there
+        if is_virtual(parent.remote_id) and not (parent.remote_id == VIRTUAL_TRASH_INFO and ".trashinfo" in name):
+            raise FuseOSError(errno.EACCES)
+
     def _call(self, fn, *args):
         try:
             return fn(*args)
@@ -100,9 +122,10 @@ class DriveFS(Operations):
     def getattr(self, path, fh=None):
         n = self._node(path)
         if n.is_dir:
-            mode, size, nlink = stat.S_IFDIR | 0o700, 4096, 2
+            mode, size, nlink = stat.S_IFDIR | (0o700 if n.caps & CAP_ADD else 0o500), 4096, 2
         else:
-            mode = stat.S_IFREG | (0o400 if is_native(n.mime) else 0o600)
+            writable = n.caps & CAP_EDIT and not is_native(n.mime)
+            mode = stat.S_IFREG | (0o600 if writable else 0o400)
             size, nlink = n.size, 1
         mtime = n.mtime_ns or self.started_ns
         fd = None if n.is_dir else self.engine.writer_fd(n.ino)
@@ -155,6 +178,7 @@ class DriveFS(Operations):
     def mkdir(self, path, mode):
         self._writable_tree()
         parent, name = self._parent_and_name(path)
+        self._require_add(parent, ".")
         self._call(self.engine.make_dir, parent.ino, name)
         return 0
 
@@ -166,6 +190,7 @@ class DriveFS(Operations):
             raise FuseOSError(errno.ENOTDIR)
         if self.store.children(n.ino):
             raise FuseOSError(errno.ENOTEMPTY)
+        self._require(n, CAP_TRASH)
         self.engine.remove(n)
         return 0
 
@@ -173,6 +198,7 @@ class DriveFS(Operations):
         n = self._node(path)
         if n.is_dir:
             raise FuseOSError(errno.EISDIR)
+        self._require(n, CAP_TRASH)
         self.engine.remove(n)
         return 0
 
@@ -182,13 +208,29 @@ class DriveFS(Operations):
         if src.ino == ROOT:
             raise FuseOSError(errno.EBUSY)
         parent, name = self._parent_and_name(new)
+        if parent.remote_id == VIRTUAL_TRASH_FILES:
+            return self._trash(src, name)
+        self._require_add(parent, name)
+        if parent.remote_id == VIRTUAL_TRASH_INFO:
+            self.engine.remove(src)  # GNOME saves its note via a temp file; the note is discarded anyway
+            return 0
         self._call(self.engine.rename, src, parent, name)
+        return 0
+
+    def _trash(self, src, name):
+        """Delete in Files: "move to <mount>/.Trash-<uid>/files" means move to the Drive trash."""
+        self._require(src, CAP_TRASH)
+        self._call(self.engine.remove_tree, src)
+        info = self.store.resolve(f"{self.store.path_of(self.store.by_remote(VIRTUAL_TRASH_INFO).ino)}/{name}.trashinfo")
+        if info is not None:
+            self.engine.remove(info)
         return 0
 
     # ----------------------------------------------------------- file data
     def create(self, path, mode, fi=None):
         self._writable_tree()
         parent, name = self._parent_and_name(path)
+        self._require_add(parent, name)
         ino, fd = self._call(self.engine.create_file, parent.ino, name)
         return self.engine.open_handle(ino, writable=True, fd=fd)
 
@@ -203,7 +245,8 @@ class DriveFS(Operations):
             return self.engine.open_handle(n.ino, False, virtual=link_bytes(n.remote_id, n.mime, n.link))
         if writable:
             self._writable_tree()
-        if not n.cached and self._background_reader():
+            self._require(n, CAP_EDIT)
+        if not n.cached and (self._background_reader() or not n.caps & CAP_DOWNLOAD):
             raise FuseOSError(errno.EACCES)
         if writable and flags & os.O_TRUNC:
             self._call(self.engine.truncate, n, 0)
@@ -239,6 +282,7 @@ class DriveFS(Operations):
 
     def truncate(self, path, length, fh=None):
         n = self._node(path) if path else self.store.get(self.engine.handle(fh).ino)
+        self._require(n, CAP_EDIT)
         self._call(self.engine.truncate, n, length, fh)
         return 0
 
@@ -269,9 +313,11 @@ class DriveFS(Operations):
             return self.engine.status_of(n).encode()
         if name == XATTR_GEN and n.ino == ROOT:
             return str(self.engine.gen).encode()
-        if name == XATTR_LINK and n.remote_id:
+        if name == XATTR_LINK and n.remote_id and not is_virtual(n.remote_id):
             if n.link:
                 return n.link.encode()
+            if n.parent == ROOT and n.name == MY_DRIVE:
+                return b"https://drive.google.com/drive/my-drive"
             kind = "drive/folders" if n.is_dir else "file/d"
             return f"https://drive.google.com/{kind}/{n.remote_id}".encode()
         raise FuseOSError(ENOATTR)

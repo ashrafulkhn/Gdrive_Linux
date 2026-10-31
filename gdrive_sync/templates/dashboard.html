@@ -67,6 +67,7 @@
   <dl class="facts">
     <div><dt>Folder</dt><dd id="fact-folder">{{ sync_dir }}</dd></div>
     <div><dt>Files and folders</dt><dd id="fact-count">-</dd></div>
+    <div><dt>Shared drives</dt><dd id="fact-drives">-</dd></div>
     <div><dt>On this computer</dt><dd><span id="fact-cache">-</span><div class="bar"><div id="cache-bar"></div></div></dd></div>
     <div><dt>Google Drive storage</dt><dd><span id="fact-quota">-</span><div class="bar"><div id="quota-bar"></div></div></dd></div>
     <div><dt>Waiting to upload</dt><dd id="fact-pending">-</dd></div>
@@ -135,7 +136,7 @@
     </label>
     <label class="check">
       <input type="checkbox" name="keep_all_offline" {% if keep_all_offline %}checked{% endif %}>
-      <span>Keep all files on this computer (mirror). Uses as much disk space as your Drive.</span>
+      <span>Keep all files on this computer (mirror), including shared drives. Uses as much disk space as they hold.</span>
     </label>
     <div><button class="btn" type="submit">Save settings</button></div>
   </form>

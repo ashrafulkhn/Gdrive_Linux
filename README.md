@@ -1,9 +1,17 @@
 # GDrive Sync for Linux
 
-Google Drive on Ubuntu, like Google Drive for desktop on Windows. Your whole
-**My Drive** appears in `~/GoogleDrive` right away, but a file downloads only
-when you open it. Changes sync both ways, and status icons in Files show
-where each file is.
+Google Drive on Ubuntu, like Google Drive for desktop on Windows. **My Drive**
+and all your **Shared drives** appear in `~/GoogleDrive` right away, but a file
+downloads only when you open it. Changes sync both ways, and status icons in
+Files show where each file is.
+
+```
+~/GoogleDrive/
+├── My Drive/
+└── Shared drives/
+    ├── Accounts/
+    └── Sales/
+```
 
 | Icon | Meaning |
 |---|---|
@@ -61,7 +69,8 @@ In the dashboard (http://127.0.0.1:8642):
    - **Tick the Google Drive permission**, then click **Continue**.
 
 Your Drive appears in `~/GoogleDrive` (Files sidebar: **Google Drive**)
-within seconds. Delete the JSON from `~/Downloads` afterwards.
+within seconds, and new shared drives appear within 30 seconds of you joining
+them. Delete the JSON from `~/Downloads` afterwards.
 
 ## 4. Daily use
 
@@ -69,8 +78,26 @@ within seconds. Delete the JSON from `~/Downloads` afterwards.
 |---|---|
 | Keep a file or folder offline | Right-click → **Make available offline** |
 | Free disk space | Right-click → **Free up space** (stays in Drive) |
-| Download everything (mirror) | Dashboard → Settings → *Keep all files on this computer* |
+| Download everything (mirror) | Dashboard → Settings → *Keep all files on this computer* (includes shared drives) |
+| Delete | Delete key in Files, or `rm`. Items go to the Drive trash, or the shared drive's trash. |
 | Open the dashboard | App menu → **GDrive Sync** |
+
+### Shared drives
+
+Your role in each shared drive decides what you can do:
+
+| Role | Open | Edit | Add | Move | Delete |
+|---|---|---|---|---|---|
+| Manager, Content manager | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Contributor | ✓ | ✓ | ✓ | – | – |
+| Commenter, Viewer | ✓ | – | – | – | – |
+
+The app follows what Google reports for each file. Anything your role doesn't
+allow shows as read-only or "Permission denied".
+If Google refuses a change, it is undone here. Your edits are kept as a copy.
+
+Moving a file between drives works as a copy followed by a delete, so the
+item gets a new Drive ID and its sharing links change.
 
 ## 5. Stop, unmount, log out
 

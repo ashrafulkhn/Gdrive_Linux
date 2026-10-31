@@ -32,8 +32,23 @@ from pathlib import Path
 import requests
 
 from .auth import AuthError
-from .drive import FOLDER_MIME, SHORTCUT_MIME, DriveError, NotFound, guess_mime
-from .store import ROOT
+from .drive import FOLDER_MIME, SHORTCUT_MIME, DriveError, NotFound, guess_mime, is_denied
+from .store import (
+    CAP_ADD,
+    CAP_DOWNLOAD,
+    CAP_EDIT,
+    CAP_MOVE,
+    CAP_RENAME,
+    CAP_TRASH,
+    CAPS_ALL,
+    CAPS_TOP,
+    MY_DRIVE,
+    ROOT,
+    SHARED_DRIVES,
+    VIRTUAL_ROOT,
+    VIRTUAL_SHARED,
+    is_virtual,
+)
 
 log = logging.getLogger(__name__)
 
@@ -57,6 +72,8 @@ PREFETCH_BUDGET = 20     # seconds of pinned downloads per worker cycle, so Driv
 PENDING_SQL = "(dirty=1 OR remote_id IS NULL OR moved=1 OR deleted=1) AND ino<>1"
 
 STATUSES = ("cloud", "local", "pinned", "syncing", "error")
+REMOTE_COLUMNS = ("remote_id", "parent", "name", "is_dir", "mime", "size", "mtime_ns",
+                  "r_parent", "r_name", "r_md5", "r_mtime", "link", "caps")
 
 
 class SyncError(Exception):
@@ -107,6 +124,21 @@ def time_ns(rfc3339):
     if not rfc3339:
         return time.time_ns()
     return int(datetime.fromisoformat(rfc3339.replace("Z", "+00:00")).timestamp() * 1e9)
+
+
+def caps_of(f):
+    """What Google allows the current user to do with file ``f``."""
+    c = f.get("capabilities")
+    if c is None:
+        return CAPS_ALL
+    return (
+        (CAP_EDIT if c.get("canEdit") else 0)
+        | (CAP_ADD if c.get("canAddChildren") else 0)
+        | (CAP_RENAME if c.get("canRename") else 0)
+        | (CAP_TRASH if c.get("canTrash") else 0)
+        | (CAP_MOVE if c.get("canMoveItemWithinDrive") else 0)
+        | (CAP_DOWNLOAD if c.get("canDownload") else 0)
+    )
 
 
 def link_bytes(remote_id, mime, link):
@@ -182,7 +214,7 @@ class Engine:
         return self.cache_dir / str(ino)
 
     def ignored(self, name):
-        return any(fnmatch.fnmatchcase(name, p) for p in self.config.get("ignore_patterns"))
+        return ".trashinfo" in name or any(fnmatch.fnmatchcase(name, p) for p in self.config.get("ignore_patterns"))
 
     def _touch_local(self):
         self._local_changed = time.monotonic()
@@ -247,6 +279,21 @@ class Engine:
         if md5:
             return md5 != n.r_md5
         return f.get("modifiedTime") != n.r_mtime
+
+    @staticmethod
+    def _require(n, cap):
+        if not n.caps & cap:
+            raise PermissionError(errno.EACCES, "your role doesn't allow this")
+
+    def drive_top(self, n):
+        """The My Drive or shared drive folder a node lives in (None for the virtual folders)."""
+        chain = [n] + self.store.ancestors(n.ino)
+        tops = [x for x in chain if not is_virtual(x.remote_id)]
+        return tops[-1] if tops else None
+
+    def _is_top(self, n):
+        parent = self.store.get(n.parent) if n.parent else None
+        return parent is None or is_virtual(parent.remote_id)
 
     def pinned_effective(self, n):
         return n.pinned or any(a.pinned for a in self.store.ancestors(n.ino))
@@ -349,11 +396,27 @@ class Engine:
             self._drop_cache(n.ino)
         self._touch_local()
 
+    def remove_tree(self, n):
+        """Delete a file or a whole folder at once (Delete in the file manager)."""
+        with self.store.lock:
+            sub = self.store.subtree(n.ino)
+            self._rescue_unsynced(sub)  # this is meant to be undoable; these aren't in the Drive trash
+            for x in reversed(sub):
+                if not x.deleted:
+                    self.remove(x)
+
     def rename(self, src, parent, name):
         with self.store.lock:
             src = self.store.get(src.ino)
             if src.is_dir and (parent.ino == src.ino or any(a.ino == src.ino for a in self.store.ancestors(parent.ino))):
                 raise OSError(errno.EINVAL, "cannot move a folder into itself")
+            top, target_top = self.drive_top(src), self.drive_top(parent)
+            if top is None or target_top is None or top.ino != target_top.ino:
+                # "different device": mv and Files then copy and delete, which always works
+                raise OSError(errno.EXDEV, "cannot move between drives directly")
+            need = (CAP_RENAME if name != src.name else 0) | (CAP_MOVE if parent.ino != src.parent else 0)
+            if src.caps & need != need:
+                raise PermissionError(errno.EACCES, "your role doesn't allow this")
             dst = self.store.child(parent.ino, name)
             if dst is not None and dst.ino == src.ino:
                 return
@@ -363,13 +426,16 @@ class Engine:
                         raise IsADirectoryError(errno.EISDIR, name)
                     if self.store.children(dst.ino):
                         raise OSError(errno.ENOTEMPTY, name)
+                    self._require(dst, CAP_TRASH)
                     self.remove(dst)
                 elif src.is_dir:
                     raise NotADirectoryError(errno.ENOTDIR, name)
                 elif src.cached and dst.remote_id and not is_native(src.mime) and not is_native(dst.mime):
+                    self._require(dst, CAP_EDIT)
                     self._replace_content(src, dst)
                     return
                 else:
+                    self._require(dst, CAP_TRASH)
                     self.remove(dst)
             self.store.update(src.ino, parent=parent.ino, name=name, moved=1 if src.remote_id else 0)
         self._touch_local()
@@ -435,6 +501,7 @@ class Engine:
                     self.cache_path(ino).touch(mode=0o600)
                     self.store.update(ino, cached=1)
                     return
+                self._require(n, CAP_DOWNLOAD)
                 expected = n.r_md5
                 tmp = self.cache_dir / f".dl-{ino}-{secrets.token_hex(4)}"
                 self._set_busy(self.downloading, ino, True)
@@ -632,6 +699,8 @@ class Engine:
         tracked = self.store.count("WHERE deleted=0 AND ino<>1")
         pending = len(self._pending())
         keep_all = self.store.meta("keep_all_offline") == "1"
+        shared = self.store.by_remote(VIRTUAL_SHARED)
+        drives = len(self.store.children(shared.ino)) if shared else 0
         with self._lock:
             return {
                 "state": self.state,
@@ -643,6 +712,7 @@ class Engine:
                 "activity": list(self.activity)[:100],
                 "conflicts": list(self.conflicts),
                 "files_tracked": tracked,
+                "shared_drives": drives,
                 "pending_changes": pending,
                 "downloading": len(self.downloading),
                 "cached_bytes": cached,
@@ -701,6 +771,8 @@ class Engine:
         if self.store.meta("initialized") != "1":
             self._initial_listing()
         elif remote:
+            self._refresh_capabilities()
+            self.sync_drives()
             self.pull_remote()
         if local:
             self._local_changed = 0.0
@@ -739,9 +811,11 @@ class Engine:
         if rescued:
             self._log("info", str(rescued), "unsynced files were copied here before re-syncing")
 
-    def _rescue_unsynced(self):
-        nodes = [n for n in self.store.query("WHERE is_dir=0 AND deleted=0 AND cached=1 AND (dirty=1 OR remote_id IS NULL)")
-                 if not self.ignored(n.name)]
+    def _rescue_unsynced(self, within=None):
+        """Copy files that aren't in Drive yet out of the cache (of ``within`` nodes, or all)."""
+        candidates = self.store.query("WHERE is_dir=0 AND deleted=0 AND cached=1 AND (dirty=1 OR remote_id IS NULL)")
+        wanted = None if within is None else {x.ino for x in within}
+        nodes = [n for n in candidates if not self.ignored(n.name) and (wanted is None or n.ino in wanted)]
         if not nodes:
             return None
         dest = Path.home() / f"GDrive unsynced files {datetime.now():%Y-%m-%d %H%M%S}"
@@ -757,10 +831,6 @@ class Engine:
         token = self.drive.start_page_token()
         root_id = self.drive.root_id()
         files = self.drive.list_all()
-        children = defaultdict(list)
-        for f in files:
-            if f.get("parents") and f["mimeType"] != SHORTCUT_MIME:
-                children[f["parents"][0]].append(f)
 
         if self._pending():
             self._rescue_unsynced()
@@ -768,8 +838,24 @@ class Engine:
         for p in self.cache_dir.iterdir():
             p.unlink(missing_ok=True)
         keep_all = self.store.meta("keep_all_offline") == "1"
-        self.store.update(ROOT, remote_id=root_id, pinned=1 if keep_all else 0)
-        queue = deque([(root_id, ROOT)])
+        self.store.update(ROOT, remote_id=VIRTUAL_ROOT, pinned=1 if keep_all else 0, caps=0)
+        my_drive = self.store.insert(remote_id=root_id, parent=ROOT, name=MY_DRIVE, is_dir=1, mime=FOLDER_MIME, caps=CAPS_TOP)
+        self.store.insert(remote_id=VIRTUAL_SHARED, parent=ROOT, name=SHARED_DRIVES, is_dir=1, mime=FOLDER_MIME, caps=0)
+        self.store.ensure_trash()
+        self._load_tree(root_id, my_drive, files)
+        self.store.set_meta("page_token", token)
+        self.store.set_meta("capabilities_loaded", "1")
+        self.store.set_meta("initialized", "1")
+        self.sync_drives()
+        self._log("info", "", f"Drive listed: {self.store.count('WHERE ino<>1'):,} items, nothing downloaded yet")
+
+    def _load_tree(self, top_id, top_ino, files):
+        """Insert a freshly listed drive under its top folder, parents first."""
+        children = defaultdict(list)
+        for f in files:
+            if f.get("parents") and f["mimeType"] != SHORTCUT_MIME:
+                children[f["parents"][0]].append(f)
+        queue = deque([(top_id, top_ino)])
         while queue:
             parent_rid, parent_ino = queue.popleft()
             taken = set()
@@ -782,16 +868,12 @@ class Engine:
                         name, n = numbered(base, n), n + 1
                     taken.add(name)
                     cur = self.store.conn.execute(
-                        "INSERT INTO nodes (remote_id, parent, name, is_dir, mime, size, mtime_ns, r_parent, r_name, "
-                        "r_md5, r_mtime, link) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                        f"INSERT INTO nodes ({','.join(REMOTE_COLUMNS)}) VALUES ({','.join('?' * len(REMOTE_COLUMNS))})",
                         self._remote_row(f, parent_ino, name, parent_rid),
                     )
                     if f["mimeType"] == FOLDER_MIME:
                         queue.append((f["id"], cur.lastrowid))
             self.store._changed(structural=True)
-        self.store.set_meta("page_token", token)
-        self.store.set_meta("initialized", "1")
-        self._log("info", "", f"Drive listed: {self.store.count('WHERE ino<>1'):,} items, nothing downloaded yet")
 
     @staticmethod
     def _remote_row(f, parent_ino, name, parent_rid):
@@ -799,21 +881,89 @@ class Engine:
         size = len(link_bytes(f["id"], mime, f.get("webViewLink"))) if is_native(mime) else int(f.get("size", 0))
         return (
             f["id"], parent_ino, name, int(mime == FOLDER_MIME), mime, size, time_ns(f.get("modifiedTime")),
-            parent_rid, f["name"], f.get("md5Checksum"), f.get("modifiedTime"), f.get("webViewLink"),
+            parent_rid, f["name"], f.get("md5Checksum"), f.get("modifiedTime"), f.get("webViewLink"), caps_of(f),
         )
 
+    def _refresh_capabilities(self):
+        """Once after upgrading: learn what you may do with files listed by an older version."""
+        if self.store.meta("capabilities_loaded") == "1":
+            return
+        files = self.drive.list_all()
+        with self.store.lock, self.store.conn:
+            self.store.conn.executemany(
+                "UPDATE nodes SET caps=? WHERE remote_id=?", [(caps_of(f), f["id"]) for f in files]
+            )
+        self.store.set_meta("capabilities_loaded", "1")
+        self._bump()
+
+    # -- shared drives --
+    @staticmethod
+    def _token_key(drive_id):
+        return f"drive_token:{drive_id}"
+
+    def sync_drives(self):
+        """Add, rename and remove shared drives to match the ones you are a member of."""
+        shared = self.store.by_remote(VIRTUAL_SHARED)
+        remote = {d["id"]: d for d in self.drive.list_drives()}
+        local = {n.remote_id: n for n in self.store.children(shared.ino)}
+        for rid, n in local.items():
+            if rid not in remote or self.store.meta(self._token_key(rid)) is None:  # second case: listing was cut short
+                self._drop_drive(n, gone=rid not in remote)
+        for rid, d in remote.items():
+            n = self.store.by_remote(rid)
+            caps = CAPS_TOP if d.get("capabilities", {}).get("canAddChildren", True) else CAP_DOWNLOAD
+            if n is None:
+                self._guard(("drive", d["name"]), self._add_drive, shared, d, caps)
+                continue
+            upd = {"caps": caps} if caps != n.caps else {}
+            if d["name"] != n.r_name:
+                upd.update(r_name=d["name"], name=self._unique(shared.ino, local_name(d["name"], FOLDER_MIME), own=n.ino))
+                self._log("move", n.name, f"shared drive renamed to '{d['name']}'")
+            self.store.update(n.ino, **upd)
+
+    def _add_drive(self, shared, d, caps):
+        self._set_state("syncing", f"Reading shared drive '{d['name']}'…")
+        token = self.drive.start_page_token(d["id"])  # before listing, so changes made meanwhile aren't missed
+        files = self.drive.list_all(d["id"])
+        name = self._unique(shared.ino, local_name(d["name"], FOLDER_MIME))
+        top = self.store.insert(remote_id=d["id"], parent=shared.ino, name=name, is_dir=1, mime=FOLDER_MIME,
+                                r_name=d["name"], caps=caps)
+        self._load_tree(d["id"], top, files)
+        self.store.set_meta(self._token_key(d["id"]), token)
+        self._log("info", f"{SHARED_DRIVES}/{name}", f"shared drive added: {len(files):,} items, nothing downloaded yet")
+
+    def _drop_drive(self, n, gone=True):
+        with self.store.lock:
+            sub = self.store.subtree(n.ino)
+            rescued = self._rescue_unsynced(sub)
+            for x in reversed(sub):
+                self._drop_cache(x.ino)
+                self.store.delete(x.ino)
+            self.store.del_meta(self._token_key(n.remote_id))
+        if gone:
+            where = f"; unsynced files were saved in {rescued}" if rescued else ""
+            self._log("delete", f"{SHARED_DRIVES}/{n.name}", f"you no longer have access to this shared drive{where}")
+
+    # -- change feeds --
     def pull_remote(self):
-        changes, new_token = self.drive.changes(self.store.meta("page_token"))
+        self._pull_feed("page_token", None, self.store.child(ROOT, MY_DRIVE))
+        for top in self.store.children(self.store.by_remote(VIRTUAL_SHARED).ino):
+            # one drive failing must not stop the others
+            self._guard(("changes", top.name), self._pull_feed, self._token_key(top.remote_id), top.remote_id, top)
+
+    def _pull_feed(self, token_key, drive_id, top):
+        changes, new_token = self.drive.changes(self.store.meta(token_key), drive_id)
         latest = {}
         for c in changes:
-            latest.pop(c["fileId"], None)
-            latest[c["fileId"]] = c
+            if c.get("changeType", "file") == "file" and c.get("fileId"):  # sync_drives handles drive-level changes
+                latest.pop(c["fileId"], None)
+                latest[c["fileId"]] = c
         pending, retry = list(latest.values()), False
         while pending:
             deferred = []
             for c in pending:
                 try:
-                    if not self._apply_remote(c):
+                    if not self._apply_remote(c, top):
                         deferred.append(c)
                 except (requests.RequestException, AuthError):
                     raise
@@ -823,26 +973,30 @@ class Engine:
             if len(deferred) == len(pending):
                 break
             pending = deferred
-        for c in pending:  # parent is outside My Drive (e.g. moved to a shared drive)
+        for c in pending:  # the parent isn't anywhere we can see
             n = self.store.by_remote(c["fileId"])
-            if n is not None:
+            if n is not None and self._in_feed(n, top):
                 self._remote_gone(n)
         if not retry:
-            self.store.set_meta("page_token", new_token)
+            self.store.set_meta(token_key, new_token)
 
-    def _apply_remote(self, c):
+    def _in_feed(self, n, top):
+        cur = self.drive_top(n)
+        return cur is not None and cur.ino == top.ino
+
+    def _apply_remote(self, c, top):
         """Apply one Drive change; returns False if its parent folder isn't known yet."""
         fid, f = c["fileId"], c.get("file")
-        root = self.store.get(ROOT)
-        if fid == root.remote_id:
-            return True
         n = self.store.by_remote(fid)
+        if n is not None and self._is_top(n):
+            return True
         if c.get("removed") or not f or f.get("trashed") or f["mimeType"] == SHORTCUT_MIME or not f.get("parents"):
-            if n is not None:
+            # a file moved to another drive is reported as removed here; that drive's feed has it
+            if n is not None and self._in_feed(n, top):
                 self._remote_gone(n)
             return True
         pid = f["parents"][0]
-        parent = root if pid == root.remote_id else self.store.by_remote(pid)
+        parent = self.store.by_remote(pid)
         if parent is None or not parent.is_dir or parent.deleted:
             return False
         mime = f["mimeType"]
@@ -852,14 +1006,11 @@ class Engine:
                 n = None
             if n is None:
                 name = self._unique(parent.ino, local_name(f["name"], mime))
-                row = self._remote_row(f, parent.ino, name, pid)
-                cols = ("remote_id", "parent", "name", "is_dir", "mime", "size", "mtime_ns",
-                        "r_parent", "r_name", "r_md5", "r_mtime", "link")
-                self.store.insert(**dict(zip(cols, row)))
+                self.store.insert(**dict(zip(REMOTE_COLUMNS, self._remote_row(f, parent.ino, name, pid))))
                 return True
             if n.deleted:
                 return True  # deleted here; the deletion will be applied to Drive
-            upd = {}
+            upd = {"caps": caps_of(f)} if caps_of(f) != n.caps else {}
             if (n.r_parent, n.r_name) != (pid, f["name"]):
                 if not n.moved:  # if renamed on both sides, the local name wins
                     want = local_name(f["name"], mime)
@@ -994,13 +1145,18 @@ class Engine:
                 f = self.drive.create_folder(remote_name, parent.remote_id)
             else:
                 f = self.drive.upload_new(self.cache_path(n.ino), remote_name, parent.remote_id, mime=guess_mime(n.name))
+        except DriveError as e:
+            if not is_denied(e):
+                raise
+            self._refused_create(n)
+            return
         finally:
             self._set_busy(self.uploading, n.ino, False)
         with self.store.lock:
             cur = self.store.get(n.ino)
             if cur is not None:
                 upd = dict(remote_id=f["id"], r_parent=parent.remote_id, r_name=f["name"],
-                           r_md5=f.get("md5Checksum"), r_mtime=f.get("modifiedTime"))
+                           r_md5=f.get("md5Checksum"), r_mtime=f.get("modifiedTime"), caps=caps_of(f))
                 if not cur.is_dir:
                     upd["dirty"] = 0 if cur.ver == n.ver else 1
                 if (cur.parent, remote_name_for(cur.name, cur.mime)) != (n.parent, remote_name):
@@ -1023,6 +1179,11 @@ class Engine:
             )
         except NotFound:
             self._remote_gone(n)
+            return
+        except DriveError as e:
+            if not is_denied(e):
+                raise
+            self._refused_move(n)
             return
         with self.store.lock:
             cur = self.store.get(n.ino)
@@ -1056,6 +1217,11 @@ class Engine:
         self._set_busy(self.uploading, n.ino, True)
         try:
             f = self.drive.upload_update(n.remote_id, self.cache_path(n.ino), mime=guess_mime(n.name))
+        except DriveError as e:
+            if not is_denied(e):
+                raise
+            self._refused_edit(n, remote)
+            return
         finally:
             self._set_busy(self.uploading, n.ino, False)
         with self.store.lock:
@@ -1070,12 +1236,44 @@ class Engine:
             self.drive.trash(t.remote_id)
         except NotFound:
             pass
+        except DriveError as e:
+            if not is_denied(e):
+                raise
+            self.store.update(t.ino, deleted=0, name=self._unique(t.parent, t.name))
+            self._log("error", self.store.path_of(t.ino), "your role doesn't allow deleting this; it was put back")
+            return
         with self.store.lock:
             for x in self.store.subtree(t.ino):
                 if x.deleted:
                     self._drop_cache(x.ino)
                     self.store.delete(x.ino)
         self._log("delete", t.name, "deleted here; moved to Drive trash")
+
+    # Google refused a change that looked allowed (your role changed, or it depends on the
+    # file's location). Retrying can't help, so undo it here without losing your work.
+    def _refused_create(self, n):
+        sub = self.store.subtree(n.ino)
+        path = self.store.path_of(n.ino)
+        with self.store.lock:
+            rescued = self._rescue_unsynced(sub)
+            for x in reversed(sub):
+                self._drop_cache(x.ino)
+                self.store.delete(x.ino)
+        where = f"; your copy is in {rescued}" if rescued else ""
+        self._log("error", path, f"your role doesn't allow adding this here{where}")
+
+    def _refused_move(self, n):
+        old_parent = self.store.by_remote(n.r_parent)
+        if old_parent is None:
+            raise DriveError("Google refused this move and the original folder is gone")
+        name = self._unique(old_parent.ino, local_name(n.r_name, n.mime), own=n.ino)
+        self.store.update(n.ino, parent=old_parent.ino, name=name, moved=0)
+        self._log("error", self.store.path_of(n.ino), "your role doesn't allow moving or renaming this; it was put back")
+
+    def _refused_edit(self, n, remote):
+        with self.store.lock:
+            self._conflict_copy(n, "your role doesn't allow editing this file")
+            self.store.update(n.ino, cached=0, dirty=0, size=int(remote.get("size", 0)), caps=caps_of(remote))
 
     # ================================================== offline & cache size
     def _pinned_inos(self):
@@ -1094,7 +1292,8 @@ class Engine:
                 f"""WITH RECURSIVE p(i) AS (SELECT ino FROM nodes WHERE pinned=1 AND deleted=0 UNION
                         SELECT n.ino FROM nodes n JOIN p ON n.parent = p.i WHERE n.deleted=0)
                     SELECT ino FROM nodes JOIN p ON nodes.ino = p.i
-                    WHERE is_dir=0 AND cached=0 AND remote_id IS NOT NULL AND {NATIVE_SQL} LIMIT 500"""
+                    WHERE is_dir=0 AND cached=0 AND remote_id IS NOT NULL AND caps & {CAP_DOWNLOAD} AND {NATIVE_SQL}
+                    LIMIT 500"""
             ).fetchall()
         todo = [r[0] for r in rows]
         while self._download_queue:

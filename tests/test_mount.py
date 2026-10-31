@@ -1,5 +1,6 @@
 """End-to-end test through a real FUSE mount (skipped if FUSE is unavailable)."""
 
+import errno
 import os
 import shutil
 import subprocess
@@ -13,7 +14,7 @@ _tmp_home = tempfile.mkdtemp()
 os.environ.setdefault("XDG_CONFIG_HOME", os.path.join(_tmp_home, "config"))
 os.environ.setdefault("XDG_DATA_HOME", os.path.join(_tmp_home, "data"))
 
-from fakes import FakeAuth, FakeConfig, FakeDrive  # noqa: E402
+from fakes import MANAGER, VIEWER, FakeAuth, FakeConfig, FakeDrive  # noqa: E402
 from gdrive_sync.engine import Engine  # noqa: E402
 from gdrive_sync.store import Store  # noqa: E402
 
@@ -56,10 +57,11 @@ class MountTestCase(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def status(self, rel):
-        return os.getxattr(self.mnt / rel, "user.gdrive.status").decode()
+        return os.getxattr(self.mnt / "My Drive" / rel, "user.gdrive.status").decode()
 
     def test_files_behave_like_a_normal_folder(self):
-        m = self.mnt
+        m = self.mnt / "My Drive"
+        self.assertEqual(sorted(os.listdir(self.mnt)), [f".Trash-{os.getuid()}", "My Drive", "Shared drives"])
         self.assertEqual(sorted(os.listdir(m)), ["Docs", "hello.txt"])
         self.assertEqual(os.stat(m / "Docs" / "report.pdf").st_size, 12)
         self.assertEqual(oct(os.stat(m).st_mode & 0o777), "0o700")
@@ -103,11 +105,79 @@ class MountTestCase(unittest.TestCase):
         self.engine.sync_once()
         self.assertEqual(self.status("Docs/report.pdf"), "pinned")
         self.assertTrue(os.getxattr(m / "Docs", "user.gdrive.link").startswith(b"https://drive.google.com/"))
-        gen = int(os.getxattr(m, "user.gdrive.generation"))
+        gen = int(os.getxattr(self.mnt, "user.gdrive.generation"))
         self.drive.r_create("new-from-phone.jpg", content=b"jpg")
         self.engine.sync_once()
-        self.assertGreater(int(os.getxattr(m, "user.gdrive.generation")), gen)
+        self.assertGreater(int(os.getxattr(self.mnt, "user.gdrive.generation")), gen)
         self.assertIn("new-from-phone.jpg", os.listdir(m))
+
+    def test_shared_drives_follow_your_role(self):
+        d, shared = self.drive, self.mnt / "Shared drives"
+        team = d.r_drive("Team")
+        d.r_create("plan.txt", team, b"the plan", caps=MANAGER)
+        locked = d.r_drive("Locked", can_add=False)
+        d.r_create("policy.txt", locked, b"read me", caps=VIEWER)
+        self.engine.sync_once()
+        self.assertEqual(sorted(os.listdir(shared)), ["Locked", "Team"])
+
+        # read-write drive: reading downloads, writing uploads into the shared drive
+        self.assertEqual((shared / "Team" / "plan.txt").read_bytes(), b"the plan")
+        (shared / "Team" / "new.txt").write_text("added here")
+        self.engine.sync_once()
+        self.assertEqual(d.child("new.txt", team)["driveId"], team)
+
+        # view-only drive: readable, but the kernel refuses every change
+        self.assertEqual((shared / "Locked" / "policy.txt").read_bytes(), b"read me")
+        with self.assertRaises(PermissionError):
+            (shared / "Locked" / "policy.txt").write_text("nope")
+        with self.assertRaises(PermissionError):
+            (shared / "Locked" / "new.txt").write_text("nope")
+        with self.assertRaises(PermissionError):
+            (shared / "Locked" / "policy.txt").unlink()
+        with self.assertRaises(PermissionError):
+            (self.mnt / "stray.txt").write_text("nope")
+
+        # moving between drives is a copy followed by a delete, which `mv` and Files do by themselves
+        with self.assertRaises(OSError) as cm:
+            os.rename(shared / "Team" / "new.txt", self.mnt / "My Drive" / "new.txt")
+        self.assertEqual(cm.exception.errno, errno.EXDEV)
+        shutil.move(shared / "Team" / "new.txt", self.mnt / "My Drive" / "new.txt")
+        self.engine.sync_once()
+        self.assertEqual(d.child("new.txt")["content"], b"added here")
+        self.assertIsNone(d.child("new.txt", team))
+
+    def gio_trash(self, path):
+        return subprocess.run(["gio", "trash", str(path)], capture_output=True, text=True)
+
+    @unittest.skipUnless(shutil.which("gio"), "gio is not available")
+    def test_delete_key_in_files_moves_to_the_drive_trash(self):
+        d, m = self.drive, self.mnt / "My Drive"
+        team = d.r_drive("Team")
+        shared_file = d.r_create("team.txt", team, b"t", caps=MANAGER)
+        folder = d.r_folder("Project", team, caps=MANAGER)
+        inner = d.r_create("inner.txt", folder, b"i", caps=MANAGER)
+        locked = d.r_drive("Locked", can_add=False)
+        policy = d.r_create("policy.txt", locked, b"p", caps=VIEWER)
+        self.engine.sync_once()
+        shared = self.mnt / "Shared drives"
+
+        self.assertEqual(self.gio_trash(m / "hello.txt").returncode, 0)
+        self.assertEqual(self.gio_trash(shared / "Team" / "team.txt").returncode, 0)
+        self.assertEqual(self.gio_trash(shared / "Team" / "Project").returncode, 0)
+        self.assertEqual(sorted(os.listdir(m)), ["Docs"])
+        self.assertEqual(os.listdir(shared / "Team"), [])
+        self.assertEqual(self.gio_trash(shared / "Locked" / "policy.txt").returncode, 1)
+        self.assertEqual(os.listdir(shared / "Locked"), ["policy.txt"])
+
+        self.engine.sync_once()
+        for fid in (self.hello, shared_file, folder):
+            self.assertTrue(d.files[fid]["trashed"])
+        self.assertFalse(d.files[policy]["trashed"])
+        self.assertEqual(self.engine._pending(), [])
+        self.assertEqual(os.listdir(self.mnt / f".Trash-{os.getuid()}" / "info"), [])
+        self.assertEqual(os.listdir(self.mnt / f".Trash-{os.getuid()}" / "files"), [])
+        # trashing the folder takes its contents along in Drive: no separate call for each file
+        self.assertFalse(d.files[inner]["trashed"])
 
 
 if __name__ == "__main__":

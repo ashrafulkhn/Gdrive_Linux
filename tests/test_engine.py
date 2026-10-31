@@ -26,6 +26,23 @@ from gdrive_sync.vfs import XATTR_ACTION, XATTR_STATUS, DriveFS  # noqa: E402
 O_RW, O_RD = os.O_RDWR, os.O_RDONLY
 
 
+class InMyDrive:
+    """The filesystem as seen by a program working inside the "My Drive" folder."""
+
+    def __init__(self, fs):
+        self._fs = fs
+
+    def __getattr__(self, name):
+        fn = getattr(self._fs, name)
+
+        def call(path, *args):
+            if name == "rename":
+                args = ("/My Drive" + args[0],)
+            return fn("/My Drive" + path.rstrip("/"), *args)
+
+        return call
+
+
 class EngineTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -34,8 +51,9 @@ class EngineTestCase(unittest.TestCase):
         self.store = Store(":memory:")
         self.engine = Engine(self.config, FakeAuth(), self.drive, self.store, self.tmp / "cache")
         self.engine.settle_seconds = 0
-        self.fs = DriveFS(self.engine)
-        self.fs.caller = lambda: "python3"
+        self.raw = DriveFS(self.engine)
+        self.raw.caller = lambda: "python3"
+        self.fs = InMyDrive(self.raw)
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -119,14 +137,14 @@ class EngineTestCase(unittest.TestCase):
 
     def test_thumbnailers_cannot_trigger_downloads(self):
         self.basic_drive()
-        self.fs.caller = lambda: "gdk-pixbuf-thum"
+        self.raw.caller = lambda: "gdk-pixbuf-thum"
         self.assertErrno(errno.EACCES, self.fs.open, "/b.txt", O_RD)
-        self.fs.caller = lambda: "tracker-extract"
+        self.raw.caller = lambda: "tracker-extract"
         self.assertErrno(errno.EACCES, self.fs.open, "/b.txt", O_RD)
         self.assertEqual(self.drive.downloads, 0)
-        self.fs.caller = lambda: "eog"
+        self.raw.caller = lambda: "eog"
         self.read("/b.txt")
-        self.fs.caller = lambda: "gdk-pixbuf-thum"
+        self.raw.caller = lambda: "gdk-pixbuf-thum"
         self.assertEqual(self.read("/b.txt"), b"bravo")  # already local: fine
 
     def test_new_files_and_folders_are_uploaded(self):
@@ -293,8 +311,8 @@ class EngineTestCase(unittest.TestCase):
         self.assertErrno(errno.EACCES, self.fs.open, "/Notes.gdoc", O_RW)
 
     def test_folder_is_read_only_until_drive_is_connected(self):
-        self.assertErrno(errno.EROFS, self.fs.create, "/early.txt", 0o644)
-        self.assertErrno(errno.EROFS, self.fs.mkdir, "/early", 0o755)
+        self.assertErrno(errno.EROFS, self.raw.create, "/early.txt", 0o644)
+        self.assertErrno(errno.EROFS, self.raw.mkdir, "/early", 0o755)
 
     def test_offline_edits_are_uploaded_later(self):
         self.basic_drive()
