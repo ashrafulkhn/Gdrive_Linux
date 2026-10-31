@@ -13,6 +13,8 @@ Files show where each file is.
     └── Sales/
 ```
 
+
+
 | Icon | Meaning |
 |---|---|
 | <img src="gdrive_sync/static/emblems/emblem-gdrive-cloud.svg" width="16"> | Online only (no disk space used; downloads when opened) |
@@ -20,6 +22,10 @@ Files show where each file is.
 | <img src="gdrive_sync/static/emblems/emblem-gdrive-pinned.svg" width="16"> | Always available offline |
 | <img src="gdrive_sync/static/emblems/emblem-gdrive-syncing.svg" width="16"> | Syncing |
 | <img src="gdrive_sync/static/emblems/emblem-gdrive-error.svg" width="16"> | Problem (details in the dashboard) |
+
+## Screenshot
+<img width="1919" height="664" alt="Screenshot from 2026-10-31 16-30-16" src="https://github.com/user-attachments/assets/0430910c-c0e5-4d81-b535-a8f79e48bf66" />
+
 
 ## 1. Install
 
